@@ -10,6 +10,15 @@ class Settings(BaseSettings):
     # Vazio até você rodar `python -m app.list_releases` e descobrir o ID certo.
     sendflow_release_id: str = ""
 
+    # Supabase — mesmo projeto do sendflow-leads-service, tabela PRÓPRIA e
+    # nova (não mexe na tabela do serviço principal). Fonte de verdade
+    # independente: a cada sync, baixa a lista real de participantes direto
+    # da API (não depende de webhook) e grava aqui.
+    supabase_url: str
+    supabase_service_key: str
+    supabase_table: str = "PI_AGO_26_API"
+    leads_sync_interval_minutes: int = 30
+
     # Google Sheets (Service Account) — mesma planilha do sendflow-leads-service
     google_service_account_json: str
     google_sheet_id: str
@@ -23,12 +32,8 @@ class Settings(BaseSettings):
     def admin_numbers_set(self) -> set[str]:
         return {n.strip() for n in self.admin_numbers.split(",") if n.strip()}
 
-    # Nome da coluna onde este serviço escreve o Total Limpo calculado direto
-    # pela API (lista real de participantes, deduplicada, sem admin) — coluna
-    # nova, só pra comparação, não substitui o TOTAL LIMPO (G3) que já existe.
-    # Precisa existir como header na planilha antes de ativar; o serviço não
-    # cria coluna sozinho.
-    total_limpo_column: str = "TOTAL LIMPO (API)"
+    # A cada quantos minutos recalcular F2 (TOTAL GRUPOS CHEIOS), G2 (TOTAL
+    # LEADS bruto) e G3 (TOTAL LIMPO) direto pela API.
     total_limpo_poll_interval_minutes: int = 30
 
     # Scheduler

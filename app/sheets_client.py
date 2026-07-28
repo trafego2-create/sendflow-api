@@ -65,14 +65,49 @@ def update_row(row_index: int, values: dict) -> None:
     _service.spreadsheets().values().batchUpdate(spreadsheetId=_sheet_id, body=body).execute()
 
 
+def get_value(row_index: int, column: str) -> int | float | str | None:
+    headers = _get_headers()
+    if column not in headers:
+        return None
+    col_letter = _col_letter(headers.index(column) + 1)
+    result = (
+        _service.spreadsheets()
+        .values()
+        .get(
+            spreadsheetId=_sheet_id,
+            range=f"'{_sheet_name}'!{col_letter}{row_index}",
+            valueRenderOption="UNFORMATTED_VALUE",
+        )
+        .execute()
+    )
+    values = result.get("values", [])
+    return values[0][0] if values and values[0] else None
+
+
+def _next_row_index(match_column: str) -> int:
+    headers = _get_headers()
+    col_letter = _col_letter(headers.index(match_column) + 1)
+    result = (
+        _service.spreadsheets()
+        .values()
+        .get(spreadsheetId=_sheet_id, range=f"'{_sheet_name}'!{col_letter}2:{col_letter}")
+        .execute()
+    )
+    return len(result.get("values", [])) + 2  # +1 pelo header, +1 porque é 1-based
+
+
+def append_row(values: dict, match_column: str) -> None:
+    update_row(_next_row_index(match_column), values)
+
+
 def upsert_row(match_column: str, match_value: str, values: dict) -> None:
-    # Este serviço só corrige linhas que já existem (criadas pelo daily_append
-    # do sendflow-leads-service) — não cria linha nova pra não brigar com o
-    # cron diário do serviço principal.
+    # Corrige a linha se ela já existir; senão cria (via append_row, pelo
+    # daily_append deste próprio serviço) — não depende mais do daily_append
+    # do sendflow-leads-service pra existir.
     row_index = find_row_index(match_column, match_value)
     if row_index is None:
         raise ValueError(
             f"Linha com {match_column}={match_value} não encontrada — o daily_append "
-            "do sendflow-leads-service ainda não criou a linha de hoje?"
+            "deste serviço ainda não criou a linha de hoje?"
         )
     update_row(row_index, values)

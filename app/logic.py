@@ -3,7 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app import sendflow_client, sheets_client
+from app import sendflow_client, sheets_client, supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +64,12 @@ def _numero_do_lead(lead: dict) -> str:
 
 async def poll_total_limpo() -> None:
     # Calcula "Total Leads bruto - Admins - Duplicados" direto pela lista real
-    # de participantes da API (POST /actions/export-leads), sem depender do
-    # Supabase/webhook do sendflow-leads-service. Escreve só numa coluna nova
-    # de comparação (settings.total_limpo_column) — não substitui o TOTAL
-    # LIMPO (G3) que já existe, que continua vindo do Supabase.
+    # de participantes da API (POST /actions/export-leads) e a contagem de
+    # grupos cheios (GET /releases/{id}/groups), sem depender do webhook
+    # campaign.metrics do sendflow-leads-service. Escreve direto nas mesmas
+    # células que o serviço principal usa: F2 (TOTAL GRUPOS CHEIOS), G2 (TOTAL
+    # LEADS bruto) e G3 (TOTAL LEADS da linha 3 = TOTAL LIMPO, hoje uma
+    # ARRAYFORMULA que será sobrescrita por um valor fixo).
     try:
         leads = await sendflow_client.export_leads()
     except Exception:
@@ -88,19 +90,132 @@ async def poll_total_limpo() -> None:
             continue
         numeros.add(numero)
 
+    total_bruto = len(leads)
     total_limpo = len(numeros)
 
     try:
-        sheets_client.upsert_row(
-            "DATA", today_str(), {settings.total_limpo_column: total_limpo}
-        )
+        grupos = await sendflow_client.list_groups()
+        grupos_cheios = sum(1 for g in grupos if g.get("full"))
     except Exception:
-        logger.exception("falha ao atualizar Total Limpo (API) na planilha")
+        logger.exception("falha ao consultar grupos do SendFlow")
+        return
+
+    try:
+        sheets_client.update_row(
+            2, {"TOTAL GRUPOS CHEIOS": grupos_cheios, "TOTAL LEADS": total_bruto}
+        )
+        sheets_client.update_row(3, {"TOTAL LEADS": total_limpo})
+    except Exception:
+        logger.exception("falha ao atualizar F2/G2/G3 na planilha")
+        return
+
+    # LEADS NO DIA é a MÁXIMA vista no dia, não o valor mais recente — nunca
+    # diminui, mesmo que o cálculo ao vivo caia (gente saindo dos grupos entre
+    # um ciclo e outro). Congela sozinho quando o daily_append cria a linha de
+    # amanhã, porque os próximos ciclos passam a mirar nessa linha nova.
+    try:
+        row_index = sheets_client.find_row_index("DATA", today_str())
+        if row_index is not None:
+            atual = sheets_client.get_value(row_index, "LEADS NO DIA") or 0
+            novo_maximo = max(int(atual), total_limpo)
+            sheets_client.update_row(row_index, {"LEADS NO DIA": novo_maximo})
+    except Exception:
+        logger.exception("falha ao atualizar LEADS NO DIA na planilha")
         return
 
     logger.info(
-        "Total Limpo (API) calculado: %s únicos (de %s participantes brutos, "
-        "admins e duplicados já excluídos)",
+        "F2=%s grupos cheios | G2=%s total bruto | G3=%s total limpo | LEADS NO "
+        "DIA=%s (%s participantes brutos, admins e duplicados já excluídos)",
+        grupos_cheios,
+        total_bruto,
         total_limpo,
+        novo_maximo if row_index is not None else "?",
         len(leads),
     )
+
+
+async def sync_leads() -> None:
+    # Fonte de verdade PARALELA e independente do webhook do
+    # sendflow-leads-service: a cada ciclo, baixa a lista real e completa de
+    # quem está nos grupos agora (export_leads, direto da API oficial) e
+    # sincroniza com a tabela própria no Supabase (settings.supabase_table).
+    # Cada sync é uma FOTO do estado atual, não um replay de eventos — por
+    # isso não perde gente mesmo que o serviço fique fora do ar por um tempo
+    # entre um ciclo e outro, ao contrário do webhook que perde o evento pra
+    # sempre se cair na hora. Quem some da lista (saiu de todos os grupos)
+    # vira LEAD ÚNICO=0; quem aparece pela primeira vez é inserido.
+    try:
+        leads = await sendflow_client.export_leads()
+    except Exception:
+        logger.exception("falha ao consultar export-leads do SendFlow")
+        return
+
+    grupo_por_numero: dict[int, str] = {}
+    ativos: set[int] = set()
+    for lead in leads:
+        numero_str = _numero_do_lead(lead)
+        if not numero_str or numero_str in settings.admin_numbers_set:
+            continue
+        numero = int(numero_str)
+        ativos.add(numero)
+        grupo_por_numero[numero] = lead.get("Grupo", "")
+
+    try:
+        existentes = supabase_client.fetch_all_numeros()
+    except Exception:
+        logger.exception("falha ao ler tabela do Supabase")
+        return
+
+    hoje = today_str()
+    novos = [
+        {
+            "NÚMERO": numero,
+            "GRUPO DA CAMPANHA": grupo_por_numero.get(numero, ""),
+            "LEAD ÚNICO": 1,
+            "DATA1": hoje,
+        }
+        for numero in ativos
+        if numero not in existentes
+    ]
+    virar_1 = [
+        existentes[numero]["ID"]
+        for numero in ativos
+        if numero in existentes and existentes[numero]["LEAD ÚNICO"] != 1
+    ]
+    virar_0 = [
+        row["ID"]
+        for numero, row in existentes.items()
+        if numero not in ativos and row["LEAD ÚNICO"] == 1
+    ]
+
+    try:
+        supabase_client.insert_novos(novos)
+        supabase_client.marcar_lead_unico(virar_1, 1)
+        supabase_client.marcar_lead_unico(virar_0, 0)
+    except Exception:
+        logger.exception("falha ao gravar sync de leads no Supabase")
+        return
+
+    logger.info(
+        "sync_leads: %s ativos agora | %s novos | %s voltaram a 1 | %s foram pra 0 | total único agora=%s",
+        len(ativos),
+        len(novos),
+        len(virar_1),
+        len(virar_0),
+        supabase_client.count_unique_leads(),
+    )
+
+
+async def daily_append() -> None:
+    # Cria a linha do dia na planilha (meia-noite, timezone configurado) —
+    # próprio deste serviço, não depende mais do daily_append do
+    # sendflow-leads-service pra existir. Isso "congela" o LEADS NO DIA de
+    # ontem, porque os próximos poll_total_limpo passam a mirar na linha nova.
+    hoje = today_str()
+    try:
+        sheets_client.append_row({"DATA2": hoje, "DATA": hoje}, "DATA2")
+    except Exception:
+        logger.exception("falha ao criar linha do dia na planilha")
+        return
+
+    logger.info("linha do dia criada: %s", hoje)

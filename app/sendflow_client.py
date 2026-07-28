@@ -42,7 +42,9 @@ async def export_leads(release_id: str | None = None) -> list[dict]:
     por linha. Baixa esse CSV e devolve a lista de dicts (um por linha)."""
     rid = release_id or settings.sendflow_release_id
     url = f"{settings.sendflow_base_url}/actions/export-leads"
-    async with httpx.AsyncClient(timeout=120) as client:
+    # Campanha grande (~55 mil participantes e crescendo) pode levar bem mais
+    # que 120s pra gerar o CSV do lado do SendFlow — já vimos timeout com 120s.
+    async with httpx.AsyncClient(timeout=300) as client:
         resp = await client.post(url, headers=_headers(), json={"releaseId": rid})
         resp.raise_for_status()
         data = resp.json()
@@ -54,6 +56,19 @@ async def export_leads(release_id: str | None = None) -> list[dict]:
         content = csv_resp.content.decode("utf-8-sig")
         reader = csv.DictReader(io.StringIO(content), delimiter=";")
         return list(reader)
+
+
+async def list_groups(release_id: str | None = None) -> list[dict]:
+    """Grupos da campanha, via GET /releases/{id}/groups. Cada item tem um
+    campo "full" (bool) — usado pra contar TOTAL GRUPOS CHEIOS direto da API,
+    sem depender do push campaign.metrics do webhook."""
+    rid = release_id or settings.sendflow_release_id
+    url = f"{settings.sendflow_base_url}/releases/{rid}/groups"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, headers=_headers())
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else data.get("data", [])
 
 
 async def list_releases() -> list[dict]:
