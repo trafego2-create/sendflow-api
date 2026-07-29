@@ -66,10 +66,11 @@ async def poll_total_limpo() -> None:
     # Calcula "Total Leads bruto - Admins - Duplicados" direto pela lista real
     # de participantes da API (POST /actions/export-leads) e a contagem de
     # grupos cheios (GET /releases/{id}/groups), sem depender do webhook
-    # campaign.metrics do sendflow-leads-service. Escreve direto nas mesmas
-    # células que o serviço principal usa: F2 (TOTAL GRUPOS CHEIOS), G2 (TOTAL
-    # LEADS bruto) e G3 (TOTAL LEADS da linha 3 = TOTAL LIMPO, hoje uma
-    # ARRAYFORMULA que será sobrescrita por um valor fixo).
+    # campaign.metrics do sendflow-leads-service. Escreve nas mesmas células
+    # que o serviço principal usa (TOTAL GRUPOS CHEIOS/TOTAL LEADS na linha
+    # settings.summary_row, TOTAL LIMPO na linha settings.total_limpo_row —
+    # nem toda aba usa a mesma linha, ver comentário em config.py), substituindo
+    # qualquer fórmula antiga que estivesse lá por um valor fixo.
     try:
         leads = await sendflow_client.export_leads()
     except Exception:
@@ -102,11 +103,12 @@ async def poll_total_limpo() -> None:
 
     try:
         sheets_client.update_row(
-            2, {"TOTAL GRUPOS CHEIOS": grupos_cheios, "TOTAL LEADS": total_bruto}
+            settings.summary_row,
+            {"TOTAL GRUPOS CHEIOS": grupos_cheios, "TOTAL LEADS": total_bruto},
         )
-        sheets_client.update_row(3, {"TOTAL LEADS": total_limpo})
+        sheets_client.update_row(settings.total_limpo_row, {"TOTAL LEADS": total_limpo})
     except Exception:
-        logger.exception("falha ao atualizar F2/G2/G3 na planilha")
+        logger.exception("falha ao atualizar grupos cheios/total bruto/total limpo na planilha")
         return
 
     # LEADS NO DIA é a MÁXIMA vista no dia, não o valor mais recente — nunca

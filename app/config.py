@@ -32,9 +32,17 @@ class Settings(BaseSettings):
     def admin_numbers_set(self) -> set[str]:
         return {n.strip() for n in self.admin_numbers.split(",") if n.strip()}
 
-    # A cada quantos minutos recalcular F2 (TOTAL GRUPOS CHEIOS), G2 (TOTAL
-    # LEADS bruto) e G3 (TOTAL LIMPO) direto pela API.
+    # A cada quantos minutos recalcular TOTAL GRUPOS CHEIOS/TOTAL LEADS/TOTAL
+    # LIMPO direto pela API.
     total_limpo_poll_interval_minutes: int = 30
+
+    # Linha onde ficam TOTAL GRUPOS CHEIOS/TOTAL LEADS (padrão: linha 2) e linha
+    # onde fica TOTAL LIMPO (padrão: linha 3) — nem toda aba segue esse layout
+    # exato (ex: "LEAD TOTAL VIPS" do PI-AGO-26 tem TOTAL LIMPO na linha 4, é um
+    # layout mais antigo que nunca foi atualizado). Configurável por lançamento
+    # em vez de fixo no código.
+    summary_row: int = 2
+    total_limpo_row: int = 3
 
     # Scheduler
     poll_interval_minutes: int = 15
