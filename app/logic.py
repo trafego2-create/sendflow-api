@@ -94,11 +94,36 @@ async def poll_total_limpo() -> None:
     total_bruto = len(leads)
     total_limpo = len(numeros)
 
+    # Proteção contra leitura parcial do export-leads (o CSV vem de um download
+    # separado do Firebase Storage — se a conexão cair no meio por causa do
+    # rate limit da SendAPI, csv.DictReader processa só o que chegou, sem
+    # erro nenhum, e total_limpo/total_bruto ficam artificialmente baixos).
+    # Uma queda >10% de um ciclo pro outro é implausível pra uma campanha só
+    # crescendo — nesse caso não sobrescreve, mantém o valor antigo e tenta
+    # de novo no próximo ciclo.
+    try:
+        atual_g3 = sheets_client.get_value(settings.total_limpo_row, "TOTAL LEADS")
+    except Exception:
+        atual_g3 = None
+    leitura_suspeita = (
+        isinstance(atual_g3, (int, float)) and atual_g3 > 0 and total_limpo < atual_g3 * 0.9
+    )
+
     try:
         grupos = await sendflow_client.list_groups()
         grupos_cheios = sum(1 for g in grupos if g.get("full"))
     except Exception:
         logger.exception("falha ao consultar grupos do SendFlow")
+        return
+
+    if leitura_suspeita:
+        logger.warning(
+            "TOTAL LIMPO calculado (%s) caiu mais de 10%% em relação ao valor atual "
+            "(%s) — parece leitura parcial do export-leads (rate limit/timeout). "
+            "NÃO vou sobrescrever G2/G3 neste ciclo, tentando de novo no próximo.",
+            total_limpo,
+            atual_g3,
+        )
         return
 
     try:
@@ -190,20 +215,44 @@ async def sync_leads() -> None:
         if numero not in ativos and row["LEAD ÚNICO"] == 1
     ]
 
+    # Proteção contra leitura parcial do export-leads: se de repente uma fatia
+    # grande demais de quem já era ativo "sumiu" nesta leitura, é mais
+    # provável que a conexão do CSV tenha sido cortada no meio (rate limit da
+    # SendAPI) do que todas essas pessoas terem saído de verdade em 30 min.
+    # Nesse caso NÃO marca ninguém como saiu (evita corromper o Supabase) —
+    # ainda assim insere novos e reativa quem voltou, porque isso é seguro
+    # mesmo com leitura parcial (só significaria menos gente capturada, nunca
+    # gente errada).
+    previous_ativos = sum(1 for row in existentes.values() if row["LEAD ÚNICO"] == 1)
+    queda_suspeita = previous_ativos > 0 and len(virar_0) > previous_ativos * 0.05
+
     try:
         supabase_client.insert_novos(novos)
         supabase_client.marcar_lead_unico(virar_1, 1)
-        supabase_client.marcar_lead_unico(virar_0, 0)
+        if queda_suspeita:
+            logger.warning(
+                "sync_leads: %s leads seriam marcados como saíram de uma vez (%.1f%% "
+                "do total ativo de %s) — parece leitura parcial do export-leads "
+                "(rate limit/timeout). NÃO vou marcar ninguém como saiu neste ciclo, "
+                "tentando de novo no próximo.",
+                len(virar_0),
+                100 * len(virar_0) / previous_ativos,
+                previous_ativos,
+            )
+        else:
+            supabase_client.marcar_lead_unico(virar_0, 0)
     except Exception:
         logger.exception("falha ao gravar sync de leads no Supabase")
         return
 
     logger.info(
-        "sync_leads: %s ativos agora | %s novos | %s voltaram a 1 | %s foram pra 0 | total único agora=%s",
+        "sync_leads: %s ativos agora | %s novos | %s voltaram a 1 | %s foram pra 0%s | "
+        "total único agora=%s",
         len(ativos),
         len(novos),
         len(virar_1),
-        len(virar_0),
+        0 if queda_suspeita else len(virar_0),
+        " (abortado por leitura suspeita)" if queda_suspeita else "",
         supabase_client.count_unique_leads(),
     )
 
