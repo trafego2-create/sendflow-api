@@ -3,7 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app import sendflow_client, sheets_client, supabase_client
+from app import notifications, sendflow_client, sheets_client, supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,9 @@ async def poll_analytics() -> None:
     # só corrige os dois contadores de evento, não a lista de leads únicos.
     try:
         analytics = await sendflow_client.get_analytics()
-    except Exception:
+    except Exception as e:
         logger.exception("falha ao consultar analytics do SendFlow")
+        await notifications.notify_slack(f"⚠️ poll_analytics: falha ao consultar /analytics ({e})")
         return
 
     add_dates = analytics.get("add", {}).get("dates", {})
@@ -73,8 +74,11 @@ async def poll_total_limpo() -> None:
     # qualquer fórmula antiga que estivesse lá por um valor fixo.
     try:
         leads = await sendflow_client.export_leads()
-    except Exception:
+    except Exception as e:
         logger.exception("falha ao consultar export-leads do SendFlow")
+        await notifications.notify_slack(
+            f"⚠️ poll_total_limpo: falha ao consultar /actions/export-leads ({e})"
+        )
         return
 
     if leads and not _numero_do_lead(leads[0]):
@@ -112,8 +116,9 @@ async def poll_total_limpo() -> None:
     try:
         grupos = await sendflow_client.list_groups()
         grupos_cheios = sum(1 for g in grupos if g.get("full"))
-    except Exception:
+    except Exception as e:
         logger.exception("falha ao consultar grupos do SendFlow")
+        await notifications.notify_slack(f"⚠️ poll_total_limpo: falha ao consultar /groups ({e})")
         return
 
     if leitura_suspeita:
@@ -123,6 +128,10 @@ async def poll_total_limpo() -> None:
             "NÃO vou sobrescrever G2/G3 neste ciclo, tentando de novo no próximo.",
             total_limpo,
             atual_g3,
+        )
+        await notifications.notify_slack(
+            f"⚠️ poll_total_limpo: TOTAL LIMPO caiu de {atual_g3} pra {total_limpo} "
+            "(>10%) — parece leitura parcial da API, não sobrescrevi"
         )
         return
 
@@ -173,8 +182,11 @@ async def sync_leads() -> None:
     # vira LEAD ÚNICO=0; quem aparece pela primeira vez é inserido.
     try:
         leads = await sendflow_client.export_leads()
-    except Exception:
+    except Exception as e:
         logger.exception("falha ao consultar export-leads do SendFlow")
+        await notifications.notify_slack(
+            f"⚠️ sync_leads: falha ao consultar /actions/export-leads ({e})"
+        )
         return
 
     grupo_por_numero: dict[int, str] = {}
@@ -238,6 +250,11 @@ async def sync_leads() -> None:
                 len(virar_0),
                 100 * len(virar_0) / previous_ativos,
                 previous_ativos,
+            )
+            await notifications.notify_slack(
+                f"⚠️ sync_leads: {len(virar_0)} leads seriam marcados como saíram de "
+                f"uma vez ({100 * len(virar_0) / previous_ativos:.1f}% do total ativo) "
+                "— parece leitura parcial da API, abortei essa etapa"
             )
         else:
             supabase_client.marcar_lead_unico(virar_0, 0)

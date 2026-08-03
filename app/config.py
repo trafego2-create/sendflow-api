@@ -89,5 +89,13 @@ class Settings(BaseSettings):
 
     port: int = 8000
 
+    # Nome pra identificar esse lançamento/app nas notificações do Slack (ex:
+    # "INSS", "INSS VIP", "BB Normal"). Não afeta nada além da mensagem.
+    service_label: str = "SendFlow Poller"
+
+    # URL do Incoming Webhook do Slack — opcional. Se vazio, notify_slack()
+    # não faz nada (feature desligada por padrão).
+    slack_webhook_url: str = ""
+
 
 settings = Settings()

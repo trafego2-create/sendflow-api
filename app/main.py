@@ -1,62 +1,17 @@
-import logging
-from contextlib import asynccontextmanager
-from datetime import datetime
-
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import BackgroundTasks, FastAPI
 
 from app import logic
-from app.config import settings
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-scheduler = AsyncIOScheduler(timezone=settings.timezone)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    scheduler.add_job(
-        logic.poll_analytics,
-        "interval",
-        minutes=settings.poll_interval_minutes,
-        id="poll_analytics",
-        next_run_time=datetime.now(),
-    )
-    scheduler.add_job(
-        logic.poll_total_limpo,
-        "interval",
-        minutes=settings.total_limpo_poll_interval_minutes,
-        id="poll_total_limpo",
-        next_run_time=datetime.now(),
-    )
-    scheduler.add_job(
-        logic.sync_leads,
-        "interval",
-        minutes=settings.leads_sync_interval_minutes,
-        id="sync_leads",
-        next_run_time=datetime.now(),
-    )
-    scheduler.add_job(
-        logic.daily_append,
-        CronTrigger(hour=0, minute=0, timezone=settings.timezone),
-        id="daily_append",
-    )
-    scheduler.start()
-    logger.info(
-        "scheduler iniciado: poll de analytics a cada %s min, poll de total "
-        "limpo a cada %s min, sync de leads a cada %s min, append diário 00:00 (%s)",
-        settings.poll_interval_minutes,
-        settings.total_limpo_poll_interval_minutes,
-        settings.leads_sync_interval_minutes,
-        settings.timezone,
-    )
-    yield
-    scheduler.shutdown()
-
-
-app = FastAPI(title="SendFlow Analytics Poller", lifespan=lifespan)
+# Sem agendador interno de propósito: o EasyPanel não mantém esse processo
+# rodando continuamente entre requisições (o agendador em background nunca
+# disparava sozinho, só quando uma rota HTTP era chamada), e cada reinício do
+# container reagendava um disparo imediato — isso, combinado com o cron
+# externo, chegou a gerar chamadas de export-leads a cada ~2 min num fim de
+# semana, sobrecarregando a fila de ações do SendFlow (link de convite parou
+# de funcionar). Agora QUEM dispara cada ciclo é só o cron externo
+# (cron-job.org) batendo nas rotas abaixo — nada roda sozinho dentro do
+# processo.
+app = FastAPI(title="SendFlow Analytics Poller")
 
 
 @app.get("/healthz")
@@ -66,8 +21,8 @@ async def healthz():
 
 @app.post("/poll-now")
 async def poll_now():
-    """Dispara uma consulta manual imediata de ENTRADAS/SAÍDAS (fora do
-    agendamento), útil pra testar antes de esperar o próximo ciclo."""
+    """Dispara uma consulta manual de ENTRADAS/SAÍDAS. Chamado pelo cron
+    externo (cron-job.org) a cada 15 min."""
     await logic.poll_analytics()
     return {"status": "ok"}
 
