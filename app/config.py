@@ -97,5 +97,9 @@ class Settings(BaseSettings):
     # não faz nada (feature desligada por padrão).
     slack_webhook_url: str = ""
 
+    # Webhook dedicado pro canal de alertas de banimento de conta (ex:
+    # whatsapp-360). Se vazio, cai no slack_webhook_url geral.
+    slack_webhook_url_bans: str = ""
+
 
 settings = Settings()
