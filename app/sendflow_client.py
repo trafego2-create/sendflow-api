@@ -71,6 +71,31 @@ async def list_groups(release_id: str | None = None) -> list[dict]:
         return data if isinstance(data, list) else data.get("data", [])
 
 
+async def list_accounts() -> list[dict]:
+    """Contas WhatsApp do usuário (não é por releaseId — qualquer chave da
+    conta enxerga a mesma lista completa, confirmado em 12/08/2026). Cada item
+    tem whatsappSuspension {suspended, reason, endsAt}. Só lê o banco que a
+    SendFlow já mantém sobre as contas — não toca o WhatsApp ao vivo."""
+    url = f"{settings.sendflow_base_url}/accounts"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, headers=_headers())
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else data.get("data", [])
+
+
+async def list_actions(account_id: str, limit: int = 10) -> list[dict]:
+    """Últimas ações de uma conta (sendMessages, makeGroupAdmin, etc.) — só
+    leitura do histórico já registrado, não toca o WhatsApp ao vivo."""
+    url = f"{settings.sendflow_base_url}/actions"
+    params = {"accountId": account_id, "limit": limit, "orderBy": "createdAt"}
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, headers=_headers(), params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("actions", [])
+
+
 async def list_releases() -> list[dict]:
     """Lista todas as campanhas do usuário — usado só para descobrir o
     releaseId certo (ver app/list_releases.py)."""

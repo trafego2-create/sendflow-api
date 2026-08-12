@@ -1,6 +1,6 @@
 from fastapi import BackgroundTasks, FastAPI
 
-from app import logic
+from app import account_watch, logic
 
 # Sem agendador interno de propósito: o EasyPanel não mantém esse processo
 # rodando continuamente entre requisições (o agendador em background nunca
@@ -50,4 +50,14 @@ async def sync_leads_now(background_tasks: BackgroundTasks):
 async def daily_append_now():
     """Dispara manualmente a criação da linha do dia (normalmente só roda à meia-noite)."""
     await logic.daily_append()
+    return {"status": "ok"}
+
+
+@app.post("/check-account-bans-now")
+async def check_account_bans_now():
+    """Verifica se alguma conta WhatsApp foi suspensa desde a última checagem
+    e avisa no Slack com o histórico de ações recentes. Só leitura (GET
+    /accounts, GET /actions) — não toca nenhum número ao vivo, roda rápido,
+    não precisa de BackgroundTasks."""
+    await account_watch.check_account_bans()
     return {"status": "ok"}

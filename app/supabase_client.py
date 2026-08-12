@@ -5,6 +5,10 @@ from app.config import settings
 _client: Client = create_client(settings.supabase_url, settings.supabase_service_key)
 _table = settings.supabase_table
 
+# Tabela fixa (não é por lançamento) — guarda o último estado conhecido de
+# cada conta WhatsApp pra detectar transição não-suspensa -> suspensa.
+_ban_watch_table = "account_ban_watch"
+
 
 def fetch_all_numeros() -> dict[int, dict]:
     """Retorna {NÚMERO: {"ID":..., "LEAD ÚNICO":...}} pra toda a tabela.
@@ -60,3 +64,24 @@ def count_unique_leads() -> int:
         .execute()
     )
     return resp.count or 0
+
+
+def fetch_account_ban_state() -> dict[str, dict]:
+    """Retorna {account_id: {"suspended": bool, ...}} com o último estado
+    salvo de cada conta. Tabela pequena (~40 linhas), busca tudo de uma vez."""
+    resp = _client.table(_ban_watch_table).select("*").execute()
+    return {row["account_id"]: row for row in (resp.data or [])}
+
+
+def upsert_account_ban_state(
+    account_id: str, name: str | None, jid: str | None, suspended: bool, reason: str | None
+) -> None:
+    _client.table(_ban_watch_table).upsert(
+        {
+            "account_id": account_id,
+            "name": name,
+            "jid": jid,
+            "suspended": suspended,
+            "reason": reason,
+        }
+    ).execute()
