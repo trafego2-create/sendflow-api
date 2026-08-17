@@ -88,14 +88,21 @@ async def poll_total_limpo() -> None:
             list(leads[0].keys()),
         )
 
+    numeros_todos = set()
     numeros = set()
     for lead in leads:
         numero = _numero_do_lead(lead)
-        if not numero or numero in settings.admin_numbers_set:
+        if not numero:
             continue
-        numeros.add(numero)
+        numeros_todos.add(numero)
+        if numero not in settings.admin_numbers_set:
+            numeros.add(numero)
 
-    total_bruto = len(leads)
+    # TOTAL LEADS (bruto) é a contagem de NÚMEROS ÚNICOS (com admins ainda
+    # dentro), não a contagem de linhas do export-leads — cada linha é uma
+    # participação em grupo, então quem está em vários grupos da campanha
+    # contava várias vezes, inflando o número sem representar gente real.
+    total_bruto = len(numeros_todos)
     total_limpo = len(numeros)
 
     # Proteção contra leitura parcial do export-leads (o CSV vem de um download
