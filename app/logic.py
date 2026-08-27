@@ -53,6 +53,11 @@ async def poll_analytics() -> None:
         logger.exception("falha ao atualizar ENTRADAS/SAÍDAS na planilha")
         return
 
+    try:
+        supabase_client.upsert_whatsapp_snapshot(entradas_hoje=entradas, saidas_hoje=saidas)
+    except Exception:
+        logger.exception("falha ao atualizar whatsapp_snapshot (entradas/saidas)")
+
     logger.info("ENTRADAS/SAÍDAS de hoje corrigidas: %s/%s", entradas, saidas)
 
 
@@ -151,6 +156,13 @@ async def poll_total_limpo() -> None:
     except Exception:
         logger.exception("falha ao atualizar grupos cheios/total bruto/total limpo na planilha")
         return
+
+    try:
+        supabase_client.upsert_whatsapp_snapshot(
+            total_leads=total_bruto, total_limpo=total_limpo, grupos_cheios=grupos_cheios
+        )
+    except Exception:
+        logger.exception("falha ao atualizar whatsapp_snapshot (total/limpo/grupos)")
 
     # LEADS NO DIA é a MÁXIMA vista no dia, não o valor mais recente — nunca
     # diminui, mesmo que o cálculo ao vivo caia (gente saindo dos grupos entre

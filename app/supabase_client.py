@@ -66,6 +66,15 @@ def count_unique_leads() -> int:
     return resp.count or 0
 
 
+def upsert_whatsapp_snapshot(**campos) -> None:
+    """Grava só os campos passados (upsert parcial, merge-duplicates) na
+    linha desse lançamento (chave = settings.supabase_table). Fonte de
+    verdade pro Brabo Analytics ler os MESMOS números que vão pro Sheets,
+    em vez de recalcular da tabela de leads acumulada (que cresce com o
+    tempo por causa do LID do WhatsApp não ser estável entre syncs)."""
+    _client.table("whatsapp_snapshot").upsert({"tabela": _table, **campos}).execute()
+
+
 def fetch_account_ban_state() -> dict[str, dict]:
     """Retorna {account_id: {"suspended": bool, ...}} com o último estado
     salvo de cada conta. Tabela pequena (~40 linhas), busca tudo de uma vez."""
