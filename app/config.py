@@ -110,6 +110,22 @@ class Settings(BaseSettings):
         extras = {n.strip() for n in self.admin_numbers.split(",") if n.strip()}
         return ADMIN_NUMBERS_BASE | extras
 
+    # Lançamento/bloco derivados de supabase_table (ex: "PI_AGO_26_VIP_API"
+    # -> launch_code "PI-AGO-26", bloco "vip") — não precisa de env var nova,
+    # cada app já sabe sua própria tabela. Usado só pra escrever em
+    # whatsapp_sheets_resumo/whatsapp_sheets_diario (banco do Brabo Analytics),
+    # que usam o código do lançamento com hífen, igual o resto do Brabo.
+    @property
+    def bloco(self) -> str:
+        base = self.supabase_table.removesuffix("_API")
+        return "vip" if base.endswith("_VIP") else "normal"
+
+    @property
+    def launch_code(self) -> str:
+        base = self.supabase_table.removesuffix("_API")
+        base = base.removesuffix("_VIP")
+        return base.replace("_", "-")
+
     # A cada quantos minutos recalcular TOTAL GRUPOS CHEIOS/TOTAL LEADS/TOTAL
     # LIMPO direto pela API.
     total_limpo_poll_interval_minutes: int = 30

@@ -20,6 +20,10 @@ def today_ddmmyyyy() -> str:
     return datetime.now(_tz()).strftime("%d%m%Y")
 
 
+def today_iso() -> str:
+    return datetime.now(_tz()).strftime("%Y-%m-%d")
+
+
 async def poll_analytics() -> None:
     # Autocorrige ENTRADAS/SAÍDAS da linha de hoje com o total oficial do
     # SendFlow (endpoint /releases/{id}/analytics), sobrescrevendo o contador
@@ -52,6 +56,11 @@ async def poll_analytics() -> None:
     except Exception:
         logger.exception("falha ao atualizar ENTRADAS/SAÍDAS na planilha")
         return
+
+    try:
+        supabase_client.upsert_contagem_diaria(today_iso(), entradas=entradas, saidas=saidas)
+    except Exception:
+        logger.exception("falha ao gravar entradas/saidas em whatsapp_sheets_diario")
 
     logger.info("ENTRADAS/SAÍDAS de hoje corrigidas: %s/%s", entradas, saidas)
 
@@ -152,6 +161,13 @@ async def poll_total_limpo() -> None:
         logger.exception("falha ao atualizar grupos cheios/total bruto/total limpo na planilha")
         return
 
+    try:
+        supabase_client.upsert_contagem_resumo(
+            total_grupos_cheios=grupos_cheios, total_leads=total_bruto, total_limpo=total_limpo
+        )
+    except Exception:
+        logger.exception("falha ao gravar whatsapp_sheets_resumo")
+
     # LEADS NO DIA é a MÁXIMA vista no dia, não o valor mais recente — nunca
     # diminui, mesmo que o cálculo ao vivo caia (gente saindo dos grupos entre
     # um ciclo e outro). Congela sozinho quando o daily_append cria a linha de
@@ -162,6 +178,10 @@ async def poll_total_limpo() -> None:
             atual = sheets_client.get_value(row_index, "LEADS NO DIA") or 0
             novo_maximo = max(int(atual), total_limpo)
             sheets_client.update_row(row_index, {"LEADS NO DIA": novo_maximo})
+            try:
+                supabase_client.upsert_contagem_diaria(today_iso(), leads_no_dia=novo_maximo)
+            except Exception:
+                logger.exception("falha ao gravar leads_no_dia em whatsapp_sheets_diario")
     except Exception:
         logger.exception("falha ao atualizar LEADS NO DIA na planilha")
         return

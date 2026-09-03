@@ -66,6 +66,36 @@ def count_unique_leads() -> int:
     return resp.count or 0
 
 
+def upsert_contagem_resumo(*, total_grupos_cheios: int, total_leads: int, total_limpo: int) -> None:
+    """Grava Total Grupos Cheios/Total Leads/Total Limpo (os mesmos valores
+    já escritos no Sheets neste ciclo) em whatsapp_sheets_resumo — tabela do
+    banco do Brabo Analytics, alimentada direto por aqui (sem passar pelo
+    Sheets). launch_code/bloco vêm de settings.supabase_table, sem precisar
+    de config extra por app."""
+    _client.table("whatsapp_sheets_resumo").upsert(
+        {
+            "launch_code": settings.launch_code,
+            "bloco": settings.bloco,
+            "total_grupos_cheios": total_grupos_cheios,
+            "total_leads": total_leads,
+            "total_limpo": total_limpo,
+        },
+        on_conflict="launch_code,bloco",
+    ).execute()
+
+
+def upsert_contagem_diaria(data_iso: str, **campos) -> None:
+    """Grava só os campos passados (upsert parcial) na linha do dia `data_iso`
+    (YYYY-MM-DD) em whatsapp_sheets_diario — campos possíveis: entradas,
+    saidas, leads_no_dia. poll_analytics() e poll_total_limpo() escrevem
+    campos diferentes da mesma linha em ciclos separados; upsert parcial
+    garante que um não apaga o que o outro já gravou."""
+    _client.table("whatsapp_sheets_diario").upsert(
+        {"date": data_iso, "launch_code": settings.launch_code, "bloco": settings.bloco, **campos},
+        on_conflict="date,launch_code,bloco",
+    ).execute()
+
+
 def fetch_account_ban_state() -> dict[str, dict]:
     """Retorna {account_id: {"suspended": bool, ...}} com o último estado
     salvo de cada conta. Tabela pequena (~40 linhas), busca tudo de uma vez."""
