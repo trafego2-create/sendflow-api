@@ -116,6 +116,26 @@ async def poll_total_limpo() -> None:
     total_bruto = len(leads)
     total_limpo = len(numeros)
 
+    # Alarme de regressão: numa campanha real, gente em 2+ grupos + admins
+    # sempre deixa Total (bruto) bem maior que Total Limpo. Se ficarem quase
+    # iguais (<2% de diferença), é sinal de que total_bruto voltou a contar
+    # pessoa única em vez de linha — exatamente o bug de 27/08 a 03/09 (ver
+    # e5ce4bf) que passou direto sem ninguém perceber por dias. Isso pega na
+    # hora, mesmo que aconteça nesse app de novo no futuro por qualquer motivo.
+    if total_bruto > 0 and total_limpo >= total_bruto * 0.98:
+        logger.warning(
+            "%s: TOTAL (%s) e TOTAL LIMPO (%s) quase iguais (diferença <2%%) — "
+            "parece que total_bruto voltou a contar pessoa única em vez de linha "
+            "do export-leads. Confira app/logic.py::poll_total_limpo().",
+            settings.service_label, total_bruto, total_limpo,
+        )
+        await notifications.notify_slack(
+            f"🚨 {settings.service_label}: TOTAL ({total_bruto}) e TOTAL LIMPO "
+            f"({total_limpo}) quase iguais — total_bruto pode ter voltado a contar "
+            "pessoa única em vez de linha do export-leads (mesmo bug de 27/08-03/09). "
+            "Confere se esse app está com o deploy mais recente do poller."
+        )
+
     # Proteção contra leitura parcial do export-leads (o CSV vem de um download
     # separado do Firebase Storage — se a conexão cair no meio por causa do
     # rate limit da SendAPI, csv.DictReader processa só o que chegou, sem
