@@ -49,13 +49,14 @@ async def poll_analytics() -> None:
     entradas = add_dates.get(hoje, 0)
     saidas = remove_dates.get(hoje, 0)
 
-    try:
-        sheets_client.upsert_row(
-            "DATA", today_str(), {"ENTRADAS": entradas, "SAÍDAS": saidas}
-        )
-    except Exception:
-        logger.exception("falha ao atualizar ENTRADAS/SAÍDAS na planilha")
-        return
+    if settings.sheets_enabled:
+        try:
+            sheets_client.upsert_row(
+                "DATA", today_str(), {"ENTRADAS": entradas, "SAÍDAS": saidas}
+            )
+        except Exception:
+            logger.exception("falha ao atualizar ENTRADAS/SAÍDAS na planilha")
+            return
 
     try:
         supabase_client.upsert_contagem_diaria(today_iso(), entradas=entradas, saidas=saidas)
@@ -143,8 +144,13 @@ async def poll_total_limpo() -> None:
     # Uma queda >10% de um ciclo pro outro é implausível pra uma campanha só
     # crescendo — nesse caso não sobrescreve, mantém o valor antigo e tenta
     # de novo no próximo ciclo.
+    # Sem planilha (contagem só pro Brabo), o "valor atual" vem do último
+    # total_limpo gravado no banco.
     try:
-        atual_g3 = sheets_client.get_value(settings.total_limpo_row, "TOTAL LEADS")
+        if settings.sheets_enabled:
+            atual_g3 = sheets_client.get_value(settings.total_limpo_row, "TOTAL LEADS")
+        else:
+            atual_g3 = supabase_client.get_total_limpo_anterior()
     except Exception:
         atual_g3 = None
     leitura_suspeita = (
@@ -173,15 +179,16 @@ async def poll_total_limpo() -> None:
         )
         return
 
-    try:
-        sheets_client.update_row(
-            settings.summary_row,
-            {"TOTAL GRUPOS CHEIOS": grupos_cheios, "TOTAL LEADS": total_bruto},
-        )
-        sheets_client.update_row(settings.total_limpo_row, {"TOTAL LEADS": total_limpo})
-    except Exception:
-        logger.exception("falha ao atualizar grupos cheios/total bruto/total limpo na planilha")
-        return
+    if settings.sheets_enabled:
+        try:
+            sheets_client.update_row(
+                settings.summary_row,
+                {"TOTAL GRUPOS CHEIOS": grupos_cheios, "TOTAL LEADS": total_bruto},
+            )
+            sheets_client.update_row(settings.total_limpo_row, {"TOTAL LEADS": total_limpo})
+        except Exception:
+            logger.exception("falha ao atualizar grupos cheios/total bruto/total limpo na planilha")
+            return
 
     try:
         supabase_client.upsert_contagem_resumo(
@@ -194,19 +201,30 @@ async def poll_total_limpo() -> None:
     # diminui, mesmo que o cálculo ao vivo caia (gente saindo dos grupos entre
     # um ciclo e outro). Congela sozinho quando o daily_append cria a linha de
     # amanhã, porque os próximos ciclos passam a mirar nessa linha nova.
-    try:
-        row_index = sheets_client.find_row_index("DATA", today_str())
-        if row_index is not None:
-            atual = sheets_client.get_value(row_index, "LEADS NO DIA") or 0
+    novo_maximo = None
+    if settings.sheets_enabled:
+        try:
+            row_index = sheets_client.find_row_index("DATA", today_str())
+            if row_index is not None:
+                atual = sheets_client.get_value(row_index, "LEADS NO DIA") or 0
+                novo_maximo = max(int(atual), total_limpo)
+                sheets_client.update_row(row_index, {"LEADS NO DIA": novo_maximo})
+                try:
+                    supabase_client.upsert_contagem_diaria(today_iso(), leads_no_dia=novo_maximo)
+                except Exception:
+                    logger.exception("falha ao gravar leads_no_dia em whatsapp_sheets_diario")
+        except Exception:
+            logger.exception("falha ao atualizar LEADS NO DIA na planilha")
+            return
+    else:
+        # Sem planilha a "máxima do dia" vem do próprio banco; o dia vira
+        # sozinho porque a chave da linha é a data de hoje.
+        try:
+            atual = supabase_client.get_leads_no_dia(today_iso()) or 0
             novo_maximo = max(int(atual), total_limpo)
-            sheets_client.update_row(row_index, {"LEADS NO DIA": novo_maximo})
-            try:
-                supabase_client.upsert_contagem_diaria(today_iso(), leads_no_dia=novo_maximo)
-            except Exception:
-                logger.exception("falha ao gravar leads_no_dia em whatsapp_sheets_diario")
-    except Exception:
-        logger.exception("falha ao atualizar LEADS NO DIA na planilha")
-        return
+            supabase_client.upsert_contagem_diaria(today_iso(), leads_no_dia=novo_maximo)
+        except Exception:
+            logger.exception("falha ao gravar leads_no_dia em whatsapp_sheets_diario")
 
     logger.info(
         "F2=%s grupos cheios | G2=%s total bruto | G3=%s total limpo | LEADS NO "
@@ -214,7 +232,7 @@ async def poll_total_limpo() -> None:
         grupos_cheios,
         total_bruto,
         total_limpo,
-        novo_maximo if row_index is not None else "?",
+        novo_maximo if novo_maximo is not None else "?",
         len(leads),
     )
 
@@ -329,6 +347,11 @@ async def daily_append() -> None:
     # sendflow-leads-service pra existir. Isso "congela" o LEADS NO DIA de
     # ontem, porque os próximos poll_total_limpo passam a mirar na linha nova.
     hoje = today_str()
+    if not settings.sheets_enabled:
+        # Sem planilha não existe "linha do dia" pra criar: a linha de hoje em
+        # whatsapp_sheets_diario nasce sozinha no primeiro upsert do dia.
+        logger.info("daily_append ignorado: app sem planilha (Google não configurado)")
+        return
     try:
         sheets_client.append_row({"DATA2": hoje, "DATA": hoje}, "DATA2")
     except Exception:

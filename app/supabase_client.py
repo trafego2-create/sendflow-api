@@ -96,6 +96,38 @@ def upsert_contagem_diaria(data_iso: str, **campos) -> None:
     ).execute()
 
 
+def get_total_limpo_anterior() -> int | None:
+    """Último total_limpo gravado em whatsapp_sheets_resumo pra este
+    lançamento/bloco. Faz o papel que a célula do Sheets faz na proteção
+    contra leitura parcial do export-leads quando o app roda sem planilha."""
+    resp = (
+        _client.table("whatsapp_sheets_resumo")
+        .select("total_limpo")
+        .eq("launch_code", settings.launch_code)
+        .eq("bloco", settings.bloco)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0]["total_limpo"] if rows else None
+
+
+def get_leads_no_dia(data_iso: str) -> int | None:
+    """leads_no_dia já gravado hoje em whatsapp_sheets_diario (a "máxima do
+    dia" sem depender da célula LEADS NO DIA do Sheets)."""
+    resp = (
+        _client.table("whatsapp_sheets_diario")
+        .select("leads_no_dia")
+        .eq("date", data_iso)
+        .eq("launch_code", settings.launch_code)
+        .eq("bloco", settings.bloco)
+        .limit(1)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0]["leads_no_dia"] if rows else None
+
+
 def fetch_account_ban_state() -> dict[str, dict]:
     """Retorna {account_id: {"suspended": bool, ...}} com o último estado
     salvo de cada conta. Tabela pequena (~40 linhas), busca tudo de uma vez."""

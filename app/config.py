@@ -96,9 +96,16 @@ class Settings(BaseSettings):
     leads_sync_interval_minutes: int = 30
 
     # Google Sheets (Service Account) — mesma planilha do sendflow-leads-service
-    google_service_account_json: str
-    google_sheet_id: str
+    # Opcionais: contagens que só aparecem no Brabo Analytics (ex: Black,
+    # Base Forte) não têm planilha — sem essas duas vars o poller pula tudo
+    # que toca o Sheets e grava só no Supabase (sheets_enabled abaixo).
+    google_service_account_json: str = ""
+    google_sheet_id: str = ""
     google_sheet_name: str = "LEAD TOTAL"
+
+    @property
+    def sheets_enabled(self) -> bool:
+        return bool(self.google_service_account_json.strip() and self.google_sheet_id.strip())
 
     # Números de admin/staff EXTRAS além da lista base (ADMIN_NUMBERS_BASE
     # acima), caso um lançamento específico precise excluir algum número que

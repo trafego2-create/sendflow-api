@@ -7,10 +7,16 @@ from app.config import settings
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-_creds = Credentials.from_service_account_info(
-    json.loads(settings.google_service_account_json), scopes=_SCOPES
-)
-_service = build("sheets", "v4", credentials=_creds)
+# Sem GOOGLE_SERVICE_ACCOUNT_JSON/GOOGLE_SHEET_ID (contagem só pro Brabo
+# Analytics) não cria credencial nenhuma — logic.py checa
+# settings.sheets_enabled antes de chamar qualquer função daqui.
+if settings.sheets_enabled:
+    _creds = Credentials.from_service_account_info(
+        json.loads(settings.google_service_account_json), scopes=_SCOPES
+    )
+    _service = build("sheets", "v4", credentials=_creds)
+else:
+    _service = None
 _sheet_id = settings.google_sheet_id
 _sheet_name = settings.google_sheet_name
 
